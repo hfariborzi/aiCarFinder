@@ -11,3 +11,5 @@ google-generativeai
 python-dotenv
 chromedriver-autoinstaller
 pyvirtualdisplay
+pyppeteer
+websockets==10.4

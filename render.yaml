@@ -7,6 +7,8 @@ services:
     envVars:
       - key: GOOGLE_API_KEY
         sync: false
+      - key: BROWSERLESS_API_KEY
+        sync: false
       - key: PYTHONPATH
         value: .
       - key: STREAMLIT_SERVER_ENABLE_STATIC_SERVING

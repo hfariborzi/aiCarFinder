@@ -12,6 +12,7 @@ Requirements:
 - pandas
 - matplotlib
 - webdriver_manager
+- browserless-client
 """
 
 import re
@@ -27,6 +28,7 @@ from splinter import Browser
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
 import json
+from browserless_client import BrowserlessClient
 
 class FacebookMarketplaceScraper:
     def __init__(self, headless=True, debug=True):
@@ -179,11 +181,156 @@ class FacebookMarketplaceScraper:
             # Check if we're in a cloud environment where browser might not work
             is_cloud = os.environ.get('RENDER', False) or os.environ.get('DYNO', False)
             
-            # If we're in a cloud environment and browser initialization fails, return sample data
-            if is_cloud and not self.browser:
-                print("Running in cloud environment with browser issues. Returning sample data.")
-                return self._get_sample_data()
+            # If we're in a cloud environment, use Browserless.io
+            if is_cloud:
+                print("Running in cloud environment. Using Browserless.io for scraping.")
+                try:
+                    # Initialize Browserless client
+                    browserless = BrowserlessClient()
+                    
+                    # Scrape the page with Browserless
+                    html_content = browserless.scrape_page(
+                        url=url,
+                        selector=".x1gslohp",  # Wait for marketplace listings container
+                        scroll_count=scroll_count,
+                        scroll_delay=scroll_delay
+                    )
+                    
+                    if not html_content:
+                        print("Failed to get HTML content from Browserless. Returning sample data.")
+                        return self._get_sample_data()
+                    
+                    # Save HTML for debugging if needed
+                    if self.debug:
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        debug_file = os.path.join(self.output_dir, f"marketplace_html_browserless_{timestamp}.html")
+                        with open(debug_file, "w", encoding="utf-8") as f:
+                            f.write(html_content)
+                        print(f"Saved HTML to {debug_file}")
+                    
+                    # Extract JSON data from HTML
+                    json_data = browserless.extract_json_from_html(html_content)
+                    
+                    if json_data:
+                        # Process JSON data
+                        vehicles_list = []
+                        self._process_json_data(json_data, vehicles_list)
+                        
+                        if vehicles_list:
+                            self.listings = vehicles_list
+                            return vehicles_list
+                        else:
+                            print("No listings found in JSON data. Falling back to HTML parsing.")
+                    else:
+                        print("No JSON data found. Falling back to HTML parsing.")
+                    
+                    # If JSON extraction failed, try parsing HTML directly
+                    market_soup = soup(html_content, 'html.parser')
+                    vehicles_list = []
+                    
+                    # Extract listings from HTML
+                    listing_containers = market_soup.find_all('div', class_='x1gslohp')
+                    
+                    # Process HTML listings
+                    for container in listing_containers:
+                        try:
+                            # Look for title elements
+                            title_elem = None
+                            for span in container.find_all('span'):
+                                if span.text and len(span.text.split()) >= 3 and span.text.split()[0].isdigit():
+                                    title_elem = span
+                                    break
+                            
+                            if not title_elem:
+                                continue
+                            
+                            # Look for price elements
+                            price_elem = None
+                            for span in container.find_all('span'):
+                                if span.text and '$' in span.text:
+                                    price_elem = span
+                                    break
+                            
+                            if not price_elem:
+                                continue
+                            
+                            # Look for URL
+                            url_elem = container.find('a', href=True)
+                            if not url_elem:
+                                continue
+                            
+                            # Process the data
+                            title_text = title_elem.text.strip()
+                            price_text = price_elem.text.strip()
+                            url_text = url_elem.get('href')
+                            
+                            # Extract mileage from any span that mentions km
+                            mileage_text = "0 km"
+                            for span in container.find_all('span'):
+                                if span.text and 'km' in span.text.lower():
+                                    mileage_text = span.text.strip()
+                                    break
+                            
+                            # Create car dictionary
+                            cars_dict = {}
+                            title_split = title_text.split()
+                            
+                            # Skip if title doesn't have at least 3 parts (year, make, model)
+                            if len(title_split) < 3:
+                                continue
+                            
+                            # Try to parse year as integer
+                            try:
+                                cars_dict["Year"] = int(title_split[0])
+                            except ValueError:
+                                # Skip if year is not a valid integer
+                                continue
+                            
+                            cars_dict["Make"] = title_split[1]
+                            cars_dict["Model"] = title_split[2]
+                            
+                            # Extract numeric price
+                            try:
+                                cars_dict["Price"] = int(re.sub(r'[^\d.]', '', price_text))
+                            except ValueError:
+                                # Use 0 if price can't be parsed
+                                cars_dict["Price"] = 0
+                            
+                            # Extract numeric mileage
+                            mileage_match = re.search(r'(\d+)K\s*km', mileage_text)
+                            if mileage_match:
+                                cars_dict["Mileage"] = int(mileage_match.group(1)) * 1000
+                            else:
+                                # Try different format
+                                mileage_match = re.search(r'(\d+(?:,\d+)*)\s*km', mileage_text)
+                                if mileage_match:
+                                    cars_dict["Mileage"] = int(mileage_match.group(1).replace(',', ''))
+                                else:
+                                    cars_dict["Mileage"] = 0
+                            
+                            cars_dict["URL"] = url_text if url_text.startswith('http') else f"https://www.facebook.com{url_text}"
+                            
+                            # Add to list
+                            vehicles_list.append(cars_dict)
+                        except Exception as e:
+                            print(f"Error processing listing container: {e}")
+                            continue
+                    
+                    if vehicles_list:
+                        self.listings = vehicles_list
+                        return vehicles_list
+                    
+                    # If all methods fail, return sample data
+                    print("Failed to extract listings. Returning sample data.")
+                    return self._get_sample_data()
+                    
+                except Exception as e:
+                    print(f"Error using Browserless: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return self._get_sample_data()
             
+            # For local environment, use the existing Selenium/Splinter approach
             # Initialize browser if not already done
             if not self.browser:
                 if not self.initialize_browser():
@@ -381,99 +528,150 @@ class FacebookMarketplaceScraper:
             traceback.print_exc()
             return self._get_sample_data()
     
-    def _process_json_data(self, data, vehicles_list):
+    def _process_json_data(self, json_data, vehicles_list):
         """
-        Process JSON data to extract listing information
+        Process JSON data extracted from Facebook Marketplace
         
         Args:
-            data (dict): JSON data
-            vehicles_list (list): List to append vehicle dictionaries to
+            json_data (dict): JSON data from Facebook Marketplace
+            vehicles_list (list): List to append vehicle data to
+            
+        Returns:
+            None (modifies vehicles_list in place)
         """
-        # Helper function to recursively search through JSON data
-        def search_listings(obj):
-            if isinstance(obj, dict):
-                # Check if this is a listing object
-                if ('marketplace_listing_title' in obj or 'custom_title' in obj) and 'listing_price' in obj:
-                    try:
-                        # Extract car details
-                        cars_dict = {}
-                        
-                        # Get title and parse year, make, model
-                        title = obj.get('marketplace_listing_title', '') or obj.get('custom_title', '')
-                        title_split = title.split()
-                        
-                        # Skip if title doesn't have at least 3 parts (year, make, model)
-                        if len(title_split) < 3:
-                            return
-                        
-                        # Try to parse year as integer
-                        try:
-                            cars_dict["Year"] = int(title_split[0])
-                        except ValueError:
-                            # Skip if year is not a valid integer
-                            return
-                        
-                        cars_dict["Make"] = title_split[1]
-                        cars_dict["Model"] = title_split[2]
-                        
-                        # Get price
-                        if 'listing_price' in obj and 'amount' in obj['listing_price']:
+        try:
+            # Navigate through the JSON structure to find listings
+            if not json_data or not isinstance(json_data, dict):
+                return
+            
+            # Look for marketplace listings in the JSON
+            listings = None
+            
+            # Try to find the marketplace listings in the JSON structure
+            # This might need adjustment as Facebook's structure changes
+            if 'marketplace_search_feed_items' in json_data:
+                listings = json_data['marketplace_search_feed_items']
+            elif 'marketplace_search_feed' in json_data:
+                listings = json_data['marketplace_search_feed']
+            
+            # If we can't find listings directly, try to search deeper
+            if not listings:
+                for key, value in json_data.items():
+                    if isinstance(value, dict) and 'marketplace_search_feed' in value:
+                        listings = value['marketplace_search_feed']
+                        break
+            
+            # If still no listings, try to look for any key that might contain listings
+            if not listings:
+                for key, value in json_data.items():
+                    if isinstance(value, list) and len(value) > 0 and isinstance(value[0], dict):
+                        if 'listing' in value[0] or 'marketplace_listing_title' in str(value[0]):
+                            listings = value
+                            break
+            
+            if not listings or not isinstance(listings, list):
+                print("Could not find listings in JSON data")
+                return
+            
+            # Process each listing
+            for listing in listings:
+                try:
+                    # Extract listing data
+                    listing_data = listing.get('listing', listing)
+                    
+                    # Skip if not a dictionary
+                    if not isinstance(listing_data, dict):
+                        continue
+                    
+                    # Extract title
+                    title = None
+                    if 'marketplace_listing_title' in listing_data:
+                        title = listing_data['marketplace_listing_title']
+                    elif 'title' in listing_data:
+                        title = listing_data['title']
+                    
+                    # Skip if no title
+                    if not title:
+                        continue
+                    
+                    # Extract price
+                    price = 0
+                    if 'price' in listing_data:
+                        price_text = listing_data['price']
+                        if isinstance(price_text, dict) and 'amount' in price_text:
+                            price = price_text['amount']
+                        elif isinstance(price_text, str):
+                            # Extract numeric price
                             try:
-                                cars_dict["Price"] = float(obj['listing_price']['amount'])
+                                price = int(re.sub(r'[^\d.]', '', price_text))
                             except ValueError:
-                                cars_dict["Price"] = 0
-                        
-                        # Get mileage
-                        mileage = 0
-                        if 'custom_sub_titles_with_rendering_flags' in obj:
-                            for subtitle in obj['custom_sub_titles_with_rendering_flags']:
-                                if 'subtitle' in subtitle and 'km' in subtitle['subtitle'].lower():
-                                    mileage_text = subtitle['subtitle']
-                                    mileage_match = re.search(r'(\d+)K\s*km', mileage_text)
+                                price = 0
+                    
+                    # Extract URL
+                    url = None
+                    if 'url' in listing_data:
+                        url = listing_data['url']
+                    elif 'marketplace_listing_url' in listing_data:
+                        url = listing_data['marketplace_listing_url']
+                    
+                    if not url:
+                        continue
+                    
+                    # Make sure URL is absolute
+                    if not url.startswith('http'):
+                        url = f"https://www.facebook.com{url}"
+                    
+                    # Try to parse the title to extract year, make, model
+                    title_parts = title.split()
+                    if len(title_parts) < 3:
+                        continue
+                    
+                    # Try to parse year
+                    try:
+                        year = int(title_parts[0])
+                        # Skip if year is not realistic
+                        if year < 1900 or year > 2030:
+                            continue
+                    except ValueError:
+                        # Skip if year is not a valid integer
+                        continue
+                    
+                    # Create car dictionary
+                    car_dict = {
+                        "Year": year,
+                        "Make": title_parts[1],
+                        "Model": title_parts[2],
+                        "Price": price,
+                        "URL": url,
+                        "Mileage": 0  # Default mileage
+                    }
+                    
+                    # Try to extract mileage from listing
+                    if 'listing_badges' in listing_data:
+                        for badge in listing_data['listing_badges']:
+                            if isinstance(badge, dict) and 'text' in badge:
+                                badge_text = badge['text']
+                                if 'km' in badge_text.lower():
+                                    # Extract numeric mileage
+                                    mileage_match = re.search(r'(\d+)K\s*km', badge_text)
                                     if mileage_match:
-                                        mileage = int(mileage_match.group(1)) * 1000
+                                        car_dict["Mileage"] = int(mileage_match.group(1)) * 1000
                                     else:
                                         # Try different format
-                                        mileage_match = re.search(r'(\d+(?:,\d+)*)\s*km', mileage_text)
+                                        mileage_match = re.search(r'(\d+(?:,\d+)*)\s*km', badge_text)
                                         if mileage_match:
-                                            mileage = int(mileage_match.group(1).replace(',', ''))
-                        
-                        cars_dict["Mileage"] = mileage
-                        
-                        # Get URL
-                        cars_dict["URL"] = f"https://www.facebook.com/marketplace/item/{obj.get('id', '')}"
-                        
-                        # Extract image URL
-                        if 'primary_listing_photo' in obj:
-                            if 'image' in obj['primary_listing_photo']:
-                                if 'uri' in obj['primary_listing_photo']['image']:
-                                    cars_dict["ImageURL"] = obj['primary_listing_photo']['image']['uri']
-                        
-                        # Fallback for image URL in other locations
-                        if 'ImageURL' not in cars_dict and 'listing_photos' in obj and len(obj['listing_photos']) > 0:
-                            if 'image' in obj['listing_photos'][0]:
-                                if 'uri' in obj['listing_photos'][0]['image']:
-                                    cars_dict["ImageURL"] = obj['listing_photos'][0]['image']['uri']
-                        
-                        # Default image if none found
-                        if 'ImageURL' not in cars_dict:
-                            cars_dict["ImageURL"] = "https://static.xx.fbcdn.net/rsrc.php/v3/yQ/r/8SkRZ1o0i0K.png"
-                        
-                        # Add to list
-                        vehicles_list.append(cars_dict)
-                    except Exception as e:
-                        print(f"Error processing listing from JSON: {e}")
-                
-                # Continue searching in all values
-                for val in obj.values():
-                    search_listings(val)
-            elif isinstance(obj, list):
-                for item in obj:
-                    search_listings(item)
-        
-        # Start recursive search
-        search_listings(data)
-    
+                                            car_dict["Mileage"] = int(mileage_match.group(1).replace(',', ''))
+                    
+                    # Add to list
+                    vehicles_list.append(car_dict)
+                except Exception as e:
+                    print(f"Error processing listing: {e}")
+                    continue
+        except Exception as e:
+            print(f"Error processing JSON data: {e}")
+            import traceback
+            traceback.print_exc()
+
     def _get_sample_data(self):
         """
         Return sample car listing data when scraping is not possible

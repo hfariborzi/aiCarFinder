@@ -48,32 +48,37 @@ st.set_page_config(
 # Apply CSS
 load_css()
 
+# Get API key from environment variables or Streamlit secrets
+def get_api_key(key_name):
+    """Get API key from environment variables or Streamlit secrets"""
+    # First try environment variables
+    api_key = os.environ.get(key_name)
+    
+    # If not found, try Streamlit secrets
+    if not api_key:
+        try:
+            api_key = st.secrets[key_name]
+        except:
+            api_key = None
+    
+    return api_key
+
+# Get Google API key
+GOOGLE_API_KEY = get_api_key("GOOGLE_API_KEY")
+if not GOOGLE_API_KEY:
+    st.error("Google API key not found. Please set the GOOGLE_API_KEY environment variable or add it to .streamlit/secrets.toml")
+    st.stop()
+
+# Get Browserless API key (optional)
+BROWSERLESS_API_KEY = get_api_key("BROWSERLESS_API_KEY")
+if BROWSERLESS_API_KEY:
+    os.environ["BROWSERLESS_API_KEY"] = BROWSERLESS_API_KEY
+
 # Configure Gemini API
 def configure_gemini():
     """Configure the Gemini API with the API key."""
-    # Try to get API key from different sources in order of preference
-    try:
-        # First try environment variables (most reliable for deployment)
-        api_key = os.environ.get("GOOGLE_API_KEY", None) or os.environ.get("GEMINI_API_KEY", None)
-        
-        # If not found in environment, try Streamlit secrets
-        if not api_key:
-            try:
-                api_key = st.secrets.get("GEMINI_API_KEY", "")
-            except Exception as e:
-                st.warning("Could not access Streamlit secrets. Using environment variables only.")
-                api_key = ""
-    except Exception as e:
-        st.error(f"Error accessing API key: {e}")
-        api_key = ""
-    
-    if not api_key:
-        st.error("⚠️ No Gemini API key found. Please add it to your environment variables or secrets.")
-        st.info("For Render deployment, add GOOGLE_API_KEY as an environment variable in your service settings.")
-        st.stop()
-    
     # Configure Gemini with the API key
-    genai.configure(api_key=api_key)
+    genai.configure(api_key=GOOGLE_API_KEY)
     return genai
 
 # Function to analyze user preferences with Gemini
