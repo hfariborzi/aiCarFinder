@@ -52,18 +52,27 @@ load_css()
 def configure_gemini():
     """Configure the Gemini API with the API key."""
     # Try to get API key from different sources in order of preference
-    api_key = (
-        st.secrets.get("GEMINI_API_KEY", None) or  # Streamlit secrets
-        os.environ.get("GOOGLE_API_KEY", None) or  # Environment variable
-        os.environ.get("GEMINI_API_KEY", None) or  # Alternative environment variable
-        ""
-    )
+    try:
+        # First try environment variables (most reliable for deployment)
+        api_key = os.environ.get("GOOGLE_API_KEY", None) or os.environ.get("GEMINI_API_KEY", None)
+        
+        # If not found in environment, try Streamlit secrets
+        if not api_key:
+            try:
+                api_key = st.secrets.get("GEMINI_API_KEY", "")
+            except Exception as e:
+                st.warning("Could not access Streamlit secrets. Using environment variables only.")
+                api_key = ""
+    except Exception as e:
+        st.error(f"Error accessing API key: {e}")
+        api_key = ""
     
     if not api_key:
-        st.error("⚠️ No Gemini API key found. Please add it to your secrets or environment variables.")
+        st.error("⚠️ No Gemini API key found. Please add it to your environment variables or secrets.")
+        st.info("For Render deployment, add GOOGLE_API_KEY as an environment variable in your service settings.")
         st.stop()
     
-    # Don't show success message in sidebar
+    # Configure Gemini with the API key
     genai.configure(api_key=api_key)
     return genai
 
