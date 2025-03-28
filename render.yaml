@@ -2,7 +2,7 @@ services:
   - type: web
     name: car-finder-app
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: chmod +x setup.sh && ./setup.sh && pip install -r requirements.txt
     startCommand: streamlit run car_finder_app.py --server.port $PORT --server.address 0.0.0.0 --server.enableCORS=false --server.enableXsrfProtection=false --server.enableStaticServing=true
     envVars:
       - key: GOOGLE_API_KEY
@@ -15,4 +15,8 @@ services:
         value: "false"
       - key: STREAMLIT_BROWSER_GATHER_USAGE_STATS
         value: "false"
+      - key: RENDER
+        value: "true"
+      - key: PATH
+        value: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/sbin"
     plan: free
