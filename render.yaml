@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: car-finder-app
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run car_finder_app.py --server.port $PORT --server.address 0.0.0.0
+    envVars:
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: PYTHONPATH
+        value: .
+    plan: free
